@@ -47,8 +47,8 @@ def hide_overlays(page, hide_user_modal=True):
         pass
 
 
-def js_click_first(page, selectors, timeout_sec=6):
-    """여러 선택자 중 보이는 요소를 찾아 JS click()으로 즉시 클릭"""
+def js_click_first(page, selectors, timeout_sec=10):
+    """여러 선택자 중 보이는 요소를 찾아 JS click()으로 클릭"""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         for sel in selectors:
@@ -58,13 +58,31 @@ def js_click_first(page, selectors, timeout_sec=6):
                 el = loc.nth(i)
                 try:
                     if el.is_visible():
-                        el.scroll_into_view_if_needed(timeout=2000)
+                        el.scroll_into_view_if_needed(timeout=2500)
                         el.evaluate("node => node.click()")
                         return True
                 except Exception:
                     continue
-        time.sleep(0.3)
+        time.sleep(0.35)
     return False
+
+
+def dump_visible_buttons(page):
+    """3단계 실패 시 현재 화면의 버튼 텍스트/testid 일부 출력"""
+    try:
+        info = page.evaluate("""() => {
+            return Array.from(document.querySelectorAll('button'))
+                .filter(b => b.offsetParent !== null)
+                .slice(0, 15)
+                .map(b => ({
+                    text: (b.innerText || '').trim().replace(/\\s+/g, ' '),
+                    testid: b.getAttribute('data-testid') || '',
+                    aria: b.getAttribute('aria-label') || ''
+                }));
+        }""")
+        print(f"    [3단계 디버그 버튼] {info}")
+    except Exception:
+        pass
 
 
 def run_one_account(page, player_id):
@@ -74,7 +92,6 @@ def run_one_account(page, player_id):
     try:
         page.goto(URL, wait_until="domcontentloaded", timeout=20000)
         time.sleep(1.5)
-        # 로그인 입력창이 모달 안에 있을 수 있으므로 GDPR만 먼저 숨김
         hide_overlays(page, hide_user_modal=False)
 
         # 1단계: Player ID 입력
@@ -96,13 +113,12 @@ def run_one_account(page, player_id):
                 '[class*="fast-login"] button',
                 'svg.fast-login__input-container-button-icon',
             ],
-            timeout_sec=4,
+            timeout_sec=5,
         )
         if not clicked_login:
             page.keyboard.press("Enter")
         time.sleep(2.5)
 
-        # 로그인 후에는 모달/GDPR이 상품 버튼을 가리지 않도록 숨김
         hide_overlays(page, hide_user_modal=True)
 
         # 2단계: 화면 하단으로 스크롤 후 무료 아이템 담기 버튼 클릭
@@ -142,23 +158,29 @@ def run_one_account(page, player_id):
                 'button[aria-label="헤더 장바구니 버튼"]',
                 "button.cart-button",
             ],
-            timeout_sec=6,
+            timeout_sec=10,
         )
         if not opened_cart:
+            dump_visible_buttons(page)
             raise RuntimeError("장바구니 버튼을 찾지 못했습니다.")
-        time.sleep(1.2)
+
+        time.sleep(2.2)
 
         checked_out = js_click_first(
             page,
             [
                 'button[data-testid="cart-checkout-button"]',
                 "button.cart__checkout-button",
+                'button:has-text("확인해 보세요")',
+                'button:has-text("확인")',
+                'button:has-text("Checkout")',
             ],
-            timeout_sec=6,
+            timeout_sec=12,
         )
         if not checked_out:
+            dump_visible_buttons(page)
             raise RuntimeError("장바구니 확인/결제 버튼을 찾지 못했습니다.")
-        time.sleep(1.5)
+        time.sleep(2)
 
         return claimed
 
