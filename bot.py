@@ -23,33 +23,32 @@ def send_discord(total, success, fail, items):
     requests.post(DISCORD_WEBHOOK, json={"content": message})
 
 
-def run_one_account(page, user_id, user_pw):
-    """1개 계정 작업: 로그인 -> 하단 무료 3개 담기 -> 구매 확인"""
+def run_one_account(page, player_id):
+    """1개 Player ID 작업: Player ID 로그인 -> 하단 무료 아이템 담기 -> 장바구니 확인"""
     page.goto(URL, wait_until="networkidle")
     time.sleep(2)
 
-    # [확인 필요 1] 로그인 절차 (실제 사이트 버튼/입력창에 맞게 수정)
-    page.get_by_role("button", name="Sign In").click()
-    page.fill('input[type="email"]', user_id)
-    page.fill('input[type="password"]', user_pw)
-    page.get_by_role("button", name="Log In").click()
+    # 1. Player ID 입력 및 로그인 버튼 클릭 (실제 입력창/버튼에 맞게 미세 조정 가능)
+    id_input = page.locator('input[placeholder*="Player ID" i], input[type="text"], input').first
+    id_input.fill(player_id)
+    page.get_by_role("button", name="Log in").click()
     time.sleep(3)
 
-    # [확인 필요 2] 화면 최하단 스크롤 후 무료 아이템 3개 담기
+    # 2. 화면 최하단 스크롤 후 무료 아이템(예: Get free / Free) 클릭
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     time.sleep(2)
 
-    free_btns = page.locator('button:has-text("Free"), button:has-text("무료")')
+    free_btns = page.locator('button:has-text("Get free"), button:has-text("Free"), button:has-text("무료")')
     claimed = 0
     for i in range(min(free_btns.count(), 3)):
         free_btns.nth(i).click()
         claimed += 1
         time.sleep(1)
 
-    # [확인 필요 3] 장바구니 열기 및 최종 확인 클릭
-    page.locator('[aria-label="Cart"], .cart-button').first.click()
+    # 3. 장바구니 열기 및 최종 확인 클릭
+    page.locator('[aria-label="Cart"], .cart-button, button:has-text("Cart")').first.click()
     time.sleep(1)
-    page.get_by_role("button", name="확인").click()  # 영문일 경우 "Confirm" 등
+    page.get_by_role("button", name="Confirm").click()
     time.sleep(2)
 
     return claimed
@@ -62,20 +61,20 @@ def main():
     total_items = 0
 
     with sync_playwright() as p:
-        # GitHub 서버에서는 화면 창이 없으므로 반드시 True로 실행합니다.
         browser = p.chromium.launch(headless=True)
 
         for acc in ACCOUNTS:
+            pid = acc.get("player_id") or acc.get("id")
             context = browser.new_context()
             page = context.new_page()
             try:
-                items = run_one_account(page, acc["id"], acc["pw"])
+                items = run_one_account(page, pid)
                 success += 1
                 total_items += items
-                print(f"[{acc['id']}] 성공 ({items}개)")
+                print(f"[{pid}] 성공 ({items}개)")
             except Exception as e:
                 fail += 1
-                print(f"[{acc['id']}] 실패: {e}")
+                print(f"[{pid}] 실패: {e}")
             finally:
                 context.close()
 
