@@ -85,25 +85,17 @@ def click_first_matching(page, selectors, timeout_sec=8):
     return False
 
 
-def dump_cart_debug(page):
-    """장바구니 클릭 후 화면에 보이는 버튼/클릭가능 요소 덤프"""
+def is_claimable_free_button(el):
+    """이미 수령(Owned)되었거나 비활성화된 무료 버튼인지 판별"""
     try:
-        info = page.evaluate("""() => {
-            const els = Array.from(document.querySelectorAll('button, [role="button"], a[class*="checkout"], a[class*="cart"]'));
-            return els
-                .filter(el => el.offsetParent !== null)
-                .map(el => ({
-                    tag: el.tagName.toLowerCase(),
-                    text: (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40),
-                    testid: el.getAttribute('data-testid') || '',
-                    aria: el.getAttribute('aria-label') || '',
-                    cls: (typeof el.className === 'string' ? el.className : '').slice(0, 60)
-                }));
-        }""")
-        # 헤더/상품목록 외의 요소나 전체 버튼 요약 출력
-        print(f"    [3단계 디버그 요소 수: {len(info)}] {info[-15:]}")
-    except Exception as e:
-        print(f"    [3단계 디버그 실패] {e}")
+        txt = (el.inner_text() or "").strip().lower()
+        cls = (el.get_attribute("class") or "").lower()
+        disabled = el.get_attribute("disabled") is not None
+        if disabled or "button--disabled" in cls or "owned" in txt or "수령" in txt and "완료" in txt:
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def run_one_account(page, player_id):
@@ -142,7 +134,7 @@ def run_one_account(page, player_id):
 
         hide_overlays(page, hide_user_modal=True)
 
-        # 2단계: 화면 하단으로 스크롤 후 무료 아이템 담기 버튼 클릭
+        # 2단계: 화면 하단으로 스크롤 후 수령 가능한 무료 아이템 담기 버튼 클릭
         step = "2단계(무료 아이템 담기)"
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(1.5)
@@ -151,13 +143,17 @@ def run_one_account(page, player_id):
         free_btns = page.locator(
             'button[data-testid^="add-to-cart-store-button-free"], button[data-sku^="free"], button[data-testid="free-button"]'
         )
-        free_count = free_btns.count()
-        print(f"    발견된 무료 버튼 수: {free_count}")
+        total_free = free_btns.count()
+        print(f"    발견된 무료 버튼 수: {total_free}")
 
         claimed = 0
-        for i in range(min(free_count, 3)):
+        for i in range(total_free):
+            if claimed >= 3:
+                break
             hide_overlays(page, hide_user_modal=True)
             btn = free_btns.nth(i)
+            if not is_claimable_free_button(btn):
+                continue
             try:
                 if real_click_locator(page, btn, timeout_sec=4):
                     claimed += 1
@@ -166,24 +162,13 @@ def run_one_account(page, player_id):
                 print(f"    무료 버튼 {i+1}번째 클릭 스킵: {e}")
 
         if claimed == 0:
-            raise RuntimeError("클릭 가능한 무료 버튼이 없거나 담기에 실패했습니다.")
+            raise RuntimeError("수령 가능한 무료 아이템이 없습니다(이미 수령 완료일 수 있음).")
 
         # 3단계: 헤더 장바구니 열기 및 최종 확인 클릭
         step = "3단계(장바구니 열기 및 확인)"
         page.evaluate("window.scrollTo(0, 0)")
         time.sleep(0.6)
         hide_overlays(page, hide_user_modal=True)
-
-        checkout_selectors = [
-            'button[data-testid="cart-checkout-button"]',
-            "button.cart__checkout-button",
-            '[data-testid="cart-checkout-button"]',
-            '[class*="cart__checkout"]',
-            'button:has-text("확인해 보세요")',
-            'button:has-text("Claim")',
-            'button:has-text("Checkout")',
-            'button:has-text("확인")',
-        ]
 
         clicked_cart = click_first_matching(
             page,
@@ -196,10 +181,20 @@ def run_one_account(page, player_id):
             timeout_sec=8,
         )
         if not clicked_cart:
-            dump_cart_debug(page)
             raise RuntimeError("장바구니 버튼을 찾지 못했습니다.")
 
         time.sleep(2.5)
+
+        # 장바구니가 비어 있을 때만 나타나는 'Back to store'가 있는지 먼저 확인
+        back_to_store = page.locator('button[data-testid="cart-open-store-button"]')
+        checkout_selectors = [
+            'button[data-testid="cart-checkout-button"]',
+            "button.cart__checkout-button",
+            'button:has-text("확인해 보세요")',
+            'button:has-text("Claim")',
+            'button:has-text("Checkout")',
+            'button:has-text("확인")',
+        ]
 
         checked_out = click_first_matching(
             page,
@@ -207,8 +202,9 @@ def run_one_account(page, player_id):
             timeout_sec=8,
         )
         if not checked_out:
-            dump_cart_debug(page)
-            raise RuntimeError("장바구니가 열리지 않았거나 확인 버튼을 찾지 못했습니다.")
+            if back_to_store.count() > 0 and back_to_store.first.is_visible():
+                raise RuntimeError("장바구니에 담긴 수령 가능 상품이 없습니다(Back to store 상태).")
+            raise RuntimeError("장바구니 확인/결제 버튼을 찾지 못했습니다.")
 
         time.sleep(2)
         return claimed
