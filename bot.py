@@ -27,40 +27,38 @@ def send_discord(total, success, fail, items):
 def run_one_account(page, player_id):
     """1개 Player ID 작업: 로그인 -> 하단 무료 3개 담기 -> 장바구니 확인"""
     player_id = str(player_id).strip()
-    page.goto(URL, wait_until="networkidle", timeout=30000)
+    step = "페이지 접속"
+    page.goto(URL, wait_until="domcontentloaded", timeout=30000)
     time.sleep(2)
 
-    # 1. 상단/화면 내 로그인 열기 버튼이 있다면 클릭 시도 (없으면 바로 입력창 탐색)
+    # 1단계: 로그인 열기 버튼(있을 경우) 및 Player ID 입력/제출
+    step = "1단계(Player ID 입력 및 로그인)"
     open_login_btn = page.locator(
         'button:has-text("Log in"), button:has-text("Login"), button:has-text("Sign in")'
     )
-    if open_login_btn.count() > 0:
-        # 이미 입력창이 보이지 않는 상태일 때만 클릭
-        id_box = page.locator(
-            'input[placeholder*="Player ID" i], input[placeholder*="ID" i], input[type="text"]'
-        )
-        if id_box.count() == 0 or not id_box.first.is_visible():
-            open_login_btn.first.click()
-            time.sleep(1)
-
-    # 2. Player ID 입력 및 제출/로그인 클릭
-    id_input = page.locator(
+    id_box = page.locator(
         'input[placeholder*="Player ID" i], input[placeholder*="ID" i], input[type="text"], input'
-    ).first
-    id_input.wait_for(state="visible", timeout=15000)
-    id_input.click()
+    )
+    if open_login_btn.count() > 0 and (id_box.count() == 0 or not id_box.first.is_visible()):
+        open_login_btn.first.click(timeout=8000)
+        time.sleep(1)
+
+    id_input = id_box.first
+    id_input.wait_for(state="visible", timeout=8000)
+    id_input.click(timeout=8000)
     id_input.fill(player_id)
     time.sleep(0.5)
 
     submit_btn = page.locator(
         'button[type="submit"], button:has-text("Log in"), button:has-text("Login"), button:has-text("Confirm"), button:has-text("Continue")'
     ).first
-    submit_btn.click()
-    time.sleep(3)
+    submit_btn.click(timeout=8000)
+    time.sleep(2.5)
 
-    # 3. 화면 최하단으로 스크롤 후 무료 아이템 최대 3개 클릭
+    # 2단계: 화면 최하단 스크롤 후 무료 아이템 최대 3개 클릭
+    step = "2단계(무료 아이템 클릭)"
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    time.sleep(2)
+    time.sleep(1.5)
 
     free_btns = page.locator(
         'button:has-text("Get free"), button:has-text("Free"), button:has-text("무료")'
@@ -69,23 +67,24 @@ def run_one_account(page, player_id):
     claimed = 0
     for i in range(min(free_count, 3)):
         btn = free_btns.nth(i)
-        btn.scroll_into_view_if_needed()
-        btn.click()
+        btn.scroll_into_view_if_needed(timeout=8000)
+        btn.click(timeout=8000)
         claimed += 1
         time.sleep(1)
 
-    # 4. 장바구니 열기 및 최종 확인 버튼 클릭
+    # 3단계: 장바구니 열기 및 최종 확인 클릭
+    step = "3단계(장바구니 열기 및 확인)"
     cart_btn = page.locator(
         '[aria-label*="Cart" i], .cart-button, button:has-text("Cart")'
     ).first
-    cart_btn.click()
-    time.sleep(1.5)
+    cart_btn.click(timeout=8000)
+    time.sleep(1)
 
     confirm_btn = page.locator(
         'button:has-text("Confirm"), button:has-text("Checkout"), button:has-text("Claim"), button:has-text("확인")'
     ).first
-    confirm_btn.click()
-    time.sleep(2)
+    confirm_btn.click(timeout=8000)
+    time.sleep(1.5)
 
     return claimed
 
@@ -121,7 +120,6 @@ def main():
                 fail += 1
                 print(f"[{idx}/{total}] [{pid}] 실패: {e}")
             finally:
-                # 브라우저 컨텍스트를 닫아 세션 초기화(로그아웃 효과)
                 context.close()
 
         browser.close()
