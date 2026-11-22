@@ -36,10 +36,30 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 MAX_CLAIMS_PER_ACCOUNT = 6
 
 SELECTORS = {
-    "free_button": 'button:has-text("Get free"):visible, button[data-testid="free-button"]:visible',
+    "center_id_input": (
+        'input[placeholder*="Enter your player id" i],'
+        ' input[placeholder*="플레이어 ID" i]'
+    ),
+    "modal_id_input": (
+        'input[placeholder*="Enter Player ID Here" i],'
+        ' .user-id-modal input[type="password"]'
+    ),
+    "top_login_button": 'header button:has-text("Log in"), button:has-text("Log in")',
+    "login_submit": (
+        'button:has-text("Log in"):visible, button[type="submit"]:visible'
+    ),
+    "user_account": '[data-testid="user-account"]',
+    "free_cart_button": (
+        'button[data-testid^="add-to-cart-store-button-free"]:visible,'
+        ' button[data-sku^="free"][aria-label*="cart" i]:visible'
+    ),
+    "free_button": (
+        'button[data-testid="free-button"]:visible,'
+        ' button:has-text("Get free"):visible'
+    ),
     "cart_button": (
-        '[data-testid="header-cart-button"], [aria-label="Cart"],'
-        ' .cart-button, button[aria-label="헤더 장바구니 버튼"]'
+        '[data-testid="header-cart-button"], button[aria-label="Header cart'
+        ' button"], button[aria-label="헤더 장바구니 버튼"], .cart-button'
     ),
     "checkout_button": (
         '[data-testid="cart-checkout-button"], .cart__checkout-button'
@@ -71,7 +91,7 @@ def send_discord(total, success, fail, items):
 
 
 def clear_blockers(page, hide_user_modal=True):
-  """GDPR 팝업과 모달이 포인터 이벤트를 가로막지 않도록 정리"""
+  """GDPR 팝업 및 불필요한 모달이 포인터 이벤트를 가로막지 않도록 정리"""
   try:
     page.evaluate(
         """(hideModal) => {
@@ -95,7 +115,6 @@ def clear_blockers(page, hide_user_modal=True):
 
 
 def click_fast(locator, timeout=7000):
-  """모달 간섭으로 30초씩 지연되지 않도록 빠르게 클릭"""
   locator.scroll_into_view_if_needed(timeout=timeout)
   try:
     locator.click(timeout=timeout)
@@ -103,31 +122,96 @@ def click_fast(locator, timeout=7000):
     locator.evaluate("el => el.click()")
 
 
+def is_logged_in(page):
+  """상단 유저 닉네임 표시 여부로 로그인 완료 확인"""
+  acc_loc = page.locator(SELECTORS["user_account"])
+  return acc_loc.count() > 0 and acc_loc.first.is_visible()
+
+
+def login_with_both_paths(page, player_id):
+  """1순위: 가운데 입력창 로그인 -> 실패/미표시 시 2순위: 오른쪽 상단 Log in 모달 로그인"""
+  clear_blockers(page, hide_user_modal=False)
+
+  # [경로 1] 화면 가운데 "Enter your player id..." 박스 시도
+  center_input = page.locator(SELECTORS["center_id_input"]).first
+  if center_input.count() > 0 and center_input.is_visible():
+    center_input.fill(player_id)
+    time.sleep(0.3)
+    # 가운데 박스의 Log in 버튼(보통 마지막 Log in 버튼) 클릭
+    center_submit = page.locator(SELECTORS["login_submit"]).last
+    click_fast(center_submit, timeout=6000)
+    time.sleep(2)
+    if is_logged_in(page):
+      return
+
+  # [경로 2] 오른쪽 상단 "Log in" 클릭 -> "Enter Player ID Here" 모달 시도
+  clear_blockers(page, hide_user_modal=False)
+  modal_input = page.locator(SELECTORS["modal_id_input"]).first
+  if modal_input.count() == 0 or not modal_input.is_visible():
+    top_btn = page.locator(SELECTORS["top_login_button"]).first
+    if top_btn.count() > 0 and top_btn.is_visible():
+      click_fast(top_btn, timeout=6000)
+      time.sleep(1)
+
+  modal_input = page.locator(SELECTORS["modal_id_input"]).first
+  if modal_input.count() > 0 and modal_input.is_visible():
+    modal_input.fill(player_id)
+    time.sleep(0.3)
+    modal_submit = page.locator(
+        '.user-id-modal button:has-text("Log in"),'
+        ' button:has-text("Log in"):visible'
+    ).first
+    click_fast(modal_submit, timeout=6000)
+    time.sleep(2)
+
+  if not is_logged_in(page):
+    raise RuntimeError("로그인 실패(Player ID 반영 안 됨)")
+
+
 def run_one_account(page, player_id):
   page.set_default_timeout(8000)
   page.goto(URL, wait_until="domcontentloaded", timeout=25000)
   time.sleep(1.5)
+
+  # 1단계: 두 가지 로그인 경로로 Player ID 로그인
+  login_with_both_paths(page, player_id)
+  clear_blockers(page, hide_user_modal=True)
+
+  # 2단계: 화면 하단 무료 상품 영역으로 스크롤 후 수령/담기
+  page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+  time.sleep(1.5)
   clear_blockers(page, hide_user_modal=True)
 
   claimed = 0
+  # 먼저 무료 장바구니 담기 아이콘 버튼이 있으면 우선 클릭
   while claimed < MAX_CLAIMS_PER_ACCOUNT:
     clear_blockers(page, hide_user_modal=True)
-    free_btns = page.locator(SELECTORS["free_button"])
-    if free_btns.count() == 0:
-      break
-    click_fast(free_btns.first, timeout=7000)
-    claimed += 1
-    time.sleep(0.8)
+    cart_add_btns = page.locator(SELECTORS["free_cart_button"])
+    if cart_add_btns.count() > 0:
+      click_fast(cart_add_btns.first, timeout=7000)
+      claimed += 1
+      time.sleep(0.8)
+      continue
 
+    free_btns = page.locator(SELECTORS["free_button"])
+    if free_btns.count() > 0:
+      click_fast(free_btns.first, timeout=7000)
+      claimed += 1
+      time.sleep(0.8)
+      continue
+
+    break
+
+  # 3단계: 장바구니 열기 및 확인 버튼 클릭
   if claimed > 0:
     clear_blockers(page, hide_user_modal=True)
     cart_loc = page.locator(SELECTORS["cart_button"]).first
-    if cart_loc.count() > 0:
+    if cart_loc.count() > 0 and cart_loc.is_visible():
       click_fast(cart_loc, timeout=7000)
       time.sleep(1)
 
     checkout_loc = page.locator(SELECTORS["checkout_button"]).first
-    if checkout_loc.count() > 0:
+    if checkout_loc.count() > 0 and checkout_loc.is_visible():
       click_fast(checkout_loc, timeout=7000)
       time.sleep(1.5)
 
