@@ -38,17 +38,27 @@ MAX_CLAIMS_PER_ACCOUNT = 6
 SELECTORS = {
     "center_id_input": (
         'input[placeholder*="Enter your player id" i],'
-        ' input[placeholder*="플레이어 ID" i]'
+        ' input[placeholder*="Enter Player ID" i],'
+        ' input[placeholder*="플레이어 ID" i], input.fast-login__input'
     ),
     "modal_id_input": (
         'input[placeholder*="Enter Player ID Here" i],'
+        ' .user-id-modal input, [data-id="user-id-modal"] input,'
         ' .user-id-modal input[type="password"]'
     ),
-    "top_login_button": 'header button:has-text("Log in"), button:has-text("Log in")',
-    "login_submit": (
-        'button:has-text("Log in"):visible, button[type="submit"]:visible'
+    "top_login_button": (
+        'header button:has-text("Log in"), header button:has-text("로그인"),'
+        ' button:has-text("Log in")'
     ),
-    "user_account": '[data-testid="user-account"]',
+    "login_submit": (
+        'button:has-text("Log in"):visible, button:has-text("로그인"):visible,'
+        ' button[type="submit"]:visible'
+    ),
+    "user_account": (
+        '[data-testid="user-account"], [data-testid*="user" i],'
+        ' [data-testid*="account" i], [data-testid*="logout" i],'
+        ' button:has-text("Log out"), button:has-text("로그아웃")'
+    ),
     "free_cart_button": (
         'button[data-testid^="add-to-cart-store-button-free"]:visible,'
         ' button[data-sku^="free"][aria-label*="cart" i]:visible'
@@ -123,9 +133,19 @@ def click_fast(locator, timeout=7000):
 
 
 def is_logged_in(page):
-  """상단 유저 닉네임 표시 여부로 로그인 완료 확인"""
+  """로그인 계정 요소 노출 여부 또는 상단 Log in 버튼 소멸 여부로 확인"""
   acc_loc = page.locator(SELECTORS["user_account"])
-  return acc_loc.count() > 0 and acc_loc.first.is_visible()
+  if acc_loc.count() > 0:
+    for i in range(acc_loc.count()):
+      if acc_loc.nth(i).is_visible():
+        return True
+
+  # 상단 헤더에 Log in 버튼이 사라졌고 ID 입력창도 안 보이면 로그인 상태로 간주
+  header_login = page.locator('header button:has-text("Log in")')
+  center_input = page.locator(SELECTORS["center_id_input"]).first
+  header_login_hidden = header_login.count() == 0 or not header_login.first.is_visible()
+  center_input_hidden = center_input.count() == 0 or not center_input.is_visible()
+  return header_login_hidden and center_input_hidden
 
 
 def login_with_both_paths(page, player_id):
@@ -137,7 +157,6 @@ def login_with_both_paths(page, player_id):
   if center_input.count() > 0 and center_input.is_visible():
     center_input.fill(player_id)
     time.sleep(0.3)
-    # 가운데 박스의 Log in 버튼(보통 마지막 Log in 버튼) 클릭
     center_submit = page.locator(SELECTORS["login_submit"]).last
     click_fast(center_submit, timeout=6000)
     time.sleep(2)
@@ -159,6 +178,7 @@ def login_with_both_paths(page, player_id):
     time.sleep(0.3)
     modal_submit = page.locator(
         '.user-id-modal button:has-text("Log in"),'
+        ' [data-id="user-id-modal"] button:has-text("Log in"),'
         ' button:has-text("Log in"):visible'
     ).first
     click_fast(modal_submit, timeout=6000)
@@ -183,7 +203,6 @@ def run_one_account(page, player_id):
   clear_blockers(page, hide_user_modal=True)
 
   claimed = 0
-  # 먼저 무료 장바구니 담기 아이콘 버튼이 있으면 우선 클릭
   while claimed < MAX_CLAIMS_PER_ACCOUNT:
     clear_blockers(page, hide_user_modal=True)
     cart_add_btns = page.locator(SELECTORS["free_cart_button"])
