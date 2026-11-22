@@ -32,13 +32,18 @@ FIXED_ACCOUNTS = [
 # (웹샵 버튼이 바뀌거나 추가되면 아래 선택자만 수정)
 # =====================================================================
 URL = "https://store.eternalhero.rivvy.games/"
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 MAX_CLAIMS_PER_ACCOUNT = 6
 
 SELECTORS = {
-    "free_button": 'button:has-text("Get free"):visible',
-    "cart_button": '[data-testid="header-cart-button"], [aria-label="Cart"], .cart-button',
-    "checkout_button": '[data-testid="cart-checkout-button"], .cart__checkout-button',
+    "free_button": 'button:has-text("Get free"):visible, button[data-testid="free-button"]:visible',
+    "cart_button": (
+        '[data-testid="header-cart-button"], [aria-label="Cart"],'
+        ' .cart-button, button[aria-label="헤더 장바구니 버튼"]'
+    ),
+    "checkout_button": (
+        '[data-testid="cart-checkout-button"], .cart__checkout-button'
+    ),
 }
 
 
@@ -61,28 +66,70 @@ def send_discord(total, success, fail, items):
       f"• 현황: 등록 인원 {total}명 / 완료 {success}명 (실패 {fail}명)\n"
       f"• 신규 수령: 총 {items}개 수령 완료"
   )
-  requests.post(DISCORD_WEBHOOK, json={"content": message})
+  resp = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=15)
+  print(f"디스코드 전송 상태코드: {resp.status_code}")
+
+
+def clear_blockers(page, hide_user_modal=True):
+  """GDPR 팝업과 모달이 포인터 이벤트를 가로막지 않도록 정리"""
+  try:
+    page.evaluate(
+        """(hideModal) => {
+            const gdpr = document.querySelectorAll('#gdpr-consent-form, .gdpr-container');
+            gdpr.forEach((el) => {
+                el.style.setProperty('display', 'none', 'important');
+                el.style.setProperty('pointer-events', 'none', 'important');
+            });
+            if (hideModal) {
+                const modals = document.querySelectorAll('[data-id="user-id-modal"], .user-id-modal');
+                modals.forEach((m) => {
+                    m.style.setProperty('display', 'none', 'important');
+                    m.style.setProperty('pointer-events', 'none', 'important');
+                });
+            }
+        }""",
+        hide_user_modal,
+    )
+  except Exception:
+    pass
+
+
+def click_fast(locator, timeout=7000):
+  """모달 간섭으로 30초씩 지연되지 않도록 빠르게 클릭"""
+  locator.scroll_into_view_if_needed(timeout=timeout)
+  try:
+    locator.click(timeout=timeout)
+  except Exception:
+    locator.evaluate("el => el.click()")
 
 
 def run_one_account(page, player_id):
-  page.goto(URL, wait_until="networkidle")
-  time.sleep(2)
+  page.set_default_timeout(8000)
+  page.goto(URL, wait_until="domcontentloaded", timeout=25000)
+  time.sleep(1.5)
+  clear_blockers(page, hide_user_modal=True)
 
-  # 무료 버튼 클릭 (옆에 새 박스가 생겨도 항상 첫 번째 활성 버튼 기준)
   claimed = 0
   while claimed < MAX_CLAIMS_PER_ACCOUNT:
+    clear_blockers(page, hide_user_modal=True)
     free_btns = page.locator(SELECTORS["free_button"])
     if free_btns.count() == 0:
       break
-    free_btns.first.click()
+    click_fast(free_btns.first, timeout=7000)
     claimed += 1
-    time.sleep(1)
+    time.sleep(0.8)
 
   if claimed > 0:
-    page.locator(SELECTORS["cart_button"]).first.click()
-    time.sleep(1)
-    page.locator(SELECTORS["checkout_button"]).first.click()
-    time.sleep(2)
+    clear_blockers(page, hide_user_modal=True)
+    cart_loc = page.locator(SELECTORS["cart_button"]).first
+    if cart_loc.count() > 0:
+      click_fast(cart_loc, timeout=7000)
+      time.sleep(1)
+
+    checkout_loc = page.locator(SELECTORS["checkout_button"]).first
+    if checkout_loc.count() > 0:
+      click_fast(checkout_loc, timeout=7000)
+      time.sleep(1.5)
 
   return claimed
 
@@ -96,20 +143,21 @@ def main():
 
   with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
-    for acc in accounts:
+    for idx, acc in enumerate(accounts, start=1):
       pid = (acc.get("player_id") or acc.get("id") or "").strip()
       if not pid:
         continue
-      context = browser.new_context()
+      context = browser.new_context(viewport={"width": 1440, "height": 900})
       page = context.new_page()
       try:
         items = run_one_account(page, pid)
         success += 1
         total_items += items
-        print(f"{pid} 성공 ({items}개)")
+        print(f"[{idx}/{total}] {pid} 성공 ({items}개)")
       except Exception as e:
         fail += 1
-        print(f"{pid} 실패: {e}")
+        short_err = str(e).splitlines()[0] if str(e) else "오류"
+        print(f"[{idx}/{total}] {pid} 실패: {short_err}")
       finally:
         context.close()
     browser.close()
