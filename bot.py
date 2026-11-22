@@ -1,256 +1,122 @@
+Python
 import json
 import os
 import time
 from playwright.sync_api import sync_playwright
 import requests
 
+# =====================================================================
+# [상단 고정 영역 1] 유저 목록 (총 17명 / 새 유저가 생기면 여기에 한 줄씩 추가)
+# =====================================================================
+FIXED_ACCOUNTS = [
+    {"player_id": "PusOwtcLJcV03wn8RjtoECrhB1CA"},
+    {"player_id": "Ehqg9VFIColuEZ0YriFCndrkjqxC"},
+    {"player_id": "etltqmR2t7nHhsA4Zlj69eIBMgHw"},
+    {"player_id": "Cpt2bVRCBN8sPB0X4kanLhbmUQnB"},
+    {"player_id": "mKmcEKX8iEn3uyL7ay9QBupYfGVw"},
+    {"player_id": "0MnF3UKYBXPloeubzu5wqFbNircx"},
+    {"player_id": "SCk8Uc6IpSZPRH8a1fgfDe97fvD2"},
+    {"player_id": "7khxgIvJmnNZHSAitTS1fORtb5Au"},
+    {"player_id": "3e8KsPLnWGbBMdvywp6sPlfZ3iwr"},
+    {"player_id": "PMJDQNNjcUGwB1zFa7gmOccepBDq"},
+    {"player_id": "jX6vzhEGdaVhgYsrtpX3AgAQxOOW"},
+    {"player_id": "ONSm7j4CrpFGUKjWUvxpmvAPvt55"},
+    {"player_id": "LNmItELQHMJkpwagKNa6ev44UmLd"},
+    {"player_id": "lDQjbL4M6f47NtjWsM1clWtlH0dQ"},
+    {"player_id": "YAfE5fsF4tEeTxiqD7syZxIv3G2x"},
+    {"player_id": "BJw4fxytlnQTCxquBX5psPIfMt3K"},
+    {"player_id": "IcYEucZP6I5xDDD7Jffp0QrWtIaO"},
+]
+
+# =====================================================================
+# [상단 고정 영역 2] 기본 URL, 웹훅 및 웹샵 버튼 선택자
+# (웹샵 버튼이 바뀌거나 추가되면 아래 선택자만 수정)
+# =====================================================================
 URL = "https://store.eternalhero.rivvy.games/"
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
-ACCOUNTS = json.loads(os.environ.get("ACCOUNTS", "[]"))
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
+MAX_CLAIMS_PER_ACCOUNT = 6
+
+SELECTORS = {
+    "free_button": 'button:has-text("Get free"):visible',
+    "cart_button": '[data-testid="header-cart-button"], [aria-label="Cart"], .cart-button',
+    "checkout_button": '[data-testid="cart-checkout-button"], .cart__checkout-button',
+}
+
+
+# =====================================================================
+# [하단 실행 영역] 실제 수령 로직 (웹샵 구조 변경 시 이 아래는 가급적 유지)
+# =====================================================================
+def get_accounts():
+  if FIXED_ACCOUNTS:
+    return FIXED_ACCOUNTS
+  return json.loads(os.environ.get("ACCOUNTS", "[]"))
 
 
 def send_discord(total, success, fail, items):
-    """디스코드 웹훅으로 수령 결과 보고"""
-    if not DISCORD_WEBHOOK:
-        print("DISCORD_WEBHOOK 환경변수가 비어 있습니다.")
-        return
+  if not DISCORD_WEBHOOK:
+    print("디스코드 웹훅 URL이 설정되지 않았습니다.")
+    return
 
-    message = (
-        f"**[Eternal Hero 보상 수령 보고]**\n"
-        f"• 현황: 등록 인원 {total}명 / 완료 {success}명 (실패 {fail}명)\n"
-        f"• 신규 수령: 총 {items}개 수령 완료"
-    )
-    resp = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=15)
-    print(f"디스코드 전송 상태코드: {resp.status_code}")
-
-
-def hide_overlays(page, hide_user_modal=True):
-    """모달 및 GDPR 창이 클릭을 방해하지 않도록 숨김 처리"""
-    try:
-        page.evaluate(
-            """(hideModal) => {
-                const selectors = ['#gdpr-consent-form', '.gdpr-container'];
-                if (hideModal) {
-                    selectors.push('[data-id="user-id-modal"]', '.user-id-modal', '.ui-site-modal-window');
-                }
-                selectors.forEach((sel) => {
-                    document.querySelectorAll(sel).forEach((el) => {
-                        el.style.setProperty('display', 'none', 'important');
-                        el.style.setProperty('visibility', 'hidden', 'important');
-                        el.style.setProperty('pointer-events', 'none', 'important');
-                    });
-                });
-            }""",
-            hide_user_modal,
-        )
-    except Exception:
-        pass
-
-
-def real_click_locator(page, loc, timeout_sec=8):
-    """요소 중앙 좌표 마우스 클릭 -> 일반 click() -> JS click() 순으로 시도"""
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        count = loc.count()
-        for i in range(count):
-            el = loc.nth(i)
-            try:
-                if el.is_visible():
-                    el.scroll_into_view_if_needed(timeout=2500)
-                    box = el.bounding_box()
-                    if box and box["width"] > 0 and box["height"] > 0:
-                        cx = box["x"] + box["width"] / 2
-                        cy = box["y"] + box["height"] / 2
-                        page.mouse.click(cx, cy)
-                        return True
-                    try:
-                        el.click(timeout=2000)
-                        return True
-                    except Exception:
-                        el.evaluate("node => node.click()")
-                        return True
-            except Exception:
-                continue
-        time.sleep(0.3)
-    return False
-
-
-def click_first_matching(page, selectors, timeout_sec=8):
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        for sel in selectors:
-            if real_click_locator(page, page.locator(sel), timeout_sec=1):
-                return True
-        time.sleep(0.25)
-    return False
-
-
-def is_claimable_free_button(el):
-    """이미 수령(Owned)되었거나 비활성화된 무료 버튼인지 판별"""
-    try:
-        txt = (el.inner_text() or "").strip().lower()
-        cls = (el.get_attribute("class") or "").lower()
-        disabled = el.get_attribute("disabled") is not None
-        if disabled or "button--disabled" in cls or "owned" in txt or "수령" in txt and "완료" in txt:
-            return False
-        return True
-    except Exception:
-        return False
+  message = (
+      f"**[Eternal Hero 보상 수령 보고]**\n"
+      f"• 현황: 등록 인원 {total}명 / 완료 {success}명 (실패 {fail}명)\n"
+      f"• 신규 수령: 총 {items}개 수령 완료"
+  )
+  requests.post(DISCORD_WEBHOOK, json={"content": message})
 
 
 def run_one_account(page, player_id):
-    """1개 Player ID 작업: 로그인 -> 하단 무료 아이템 담기 -> 장바구니 열기 및 확인"""
-    player_id = str(player_id).strip()
-    step = "페이지 접속"
-    try:
-        page.goto(URL, wait_until="domcontentloaded", timeout=25000)
-        time.sleep(1.5)
-        hide_overlays(page, hide_user_modal=False)
+  page.goto(URL, wait_until="networkidle")
+  time.sleep(2)
 
-        # 1단계: Player ID 입력
-        step = "1단계(Player ID 입력)"
-        id_input = page.locator(
-            'input[placeholder*="플레이어 ID"], input[placeholder*="Player ID" i], input.fast-login__input, input[type="password"]'
-        ).first
-        id_input.wait_for(state="visible", timeout=10000)
-        id_input.click(timeout=5000)
-        id_input.fill(player_id)
-        time.sleep(0.5)
+  # 무료 버튼 클릭 (옆에 새 박스가 생겨도 항상 첫 번째 활성 버튼 기준)
+  claimed = 0
+  while claimed < MAX_CLAIMS_PER_ACCOUNT:
+    free_btns = page.locator(SELECTORS["free_button"])
+    if free_btns.count() == 0:
+      break
+    free_btns.first.click()
+    claimed += 1
+    time.sleep(1)
 
-        # 1단계: 화살표 버튼 또는 Enter로 로그인 제출
-        step = "1단계(로그인 제출)"
-        clicked_login = click_first_matching(
-            page,
-            [
-                'button:has(svg.fast-login__input-container-button-icon)',
-                '[class*="fast-login"] button',
-                'svg.fast-login__input-container-button-icon',
-            ],
-            timeout_sec=5,
-        )
-        if not clicked_login:
-            page.keyboard.press("Enter")
-        time.sleep(3)
+  if claimed > 0:
+    page.locator(SELECTORS["cart_button"]).first.click()
+    time.sleep(1)
+    page.locator(SELECTORS["checkout_button"]).first.click()
+    time.sleep(2)
 
-        hide_overlays(page, hide_user_modal=True)
-
-        # 2단계: 화면 하단으로 스크롤 후 수령 가능한 무료 아이템 담기 버튼 클릭
-        step = "2단계(무료 아이템 담기)"
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(1.5)
-        hide_overlays(page, hide_user_modal=True)
-
-        free_btns = page.locator(
-            'button[data-testid^="add-to-cart-store-button-free"], button[data-sku^="free"], button[data-testid="free-button"]'
-        )
-        total_free = free_btns.count()
-        print(f"    발견된 무료 버튼 수: {total_free}")
-
-        claimed = 0
-        for i in range(total_free):
-            if claimed >= 3:
-                break
-            hide_overlays(page, hide_user_modal=True)
-            btn = free_btns.nth(i)
-            if not is_claimable_free_button(btn):
-                continue
-            try:
-                if real_click_locator(page, btn, timeout_sec=4):
-                    claimed += 1
-                    time.sleep(0.9)
-            except Exception as e:
-                print(f"    무료 버튼 {i+1}번째 클릭 스킵: {e}")
-
-        if claimed == 0:
-            raise RuntimeError("수령 가능한 무료 아이템이 없습니다(이미 수령 완료일 수 있음).")
-
-        # 3단계: 헤더 장바구니 열기 및 최종 확인 클릭
-        step = "3단계(장바구니 열기 및 확인)"
-        page.evaluate("window.scrollTo(0, 0)")
-        time.sleep(0.6)
-        hide_overlays(page, hide_user_modal=True)
-
-        clicked_cart = click_first_matching(
-            page,
-            [
-                'button[data-testid="header-cart-button"]',
-                'button[aria-label="Header cart button"]',
-                'button[aria-label="헤더 장바구니 버튼"]',
-                "button.cart-button",
-            ],
-            timeout_sec=8,
-        )
-        if not clicked_cart:
-            raise RuntimeError("장바구니 버튼을 찾지 못했습니다.")
-
-        time.sleep(2.5)
-
-        # 장바구니가 비어 있을 때만 나타나는 'Back to store'가 있는지 먼저 확인
-        back_to_store = page.locator('button[data-testid="cart-open-store-button"]')
-        checkout_selectors = [
-            'button[data-testid="cart-checkout-button"]',
-            "button.cart__checkout-button",
-            'button:has-text("확인해 보세요")',
-            'button:has-text("Claim")',
-            'button:has-text("Checkout")',
-            'button:has-text("확인")',
-        ]
-
-        checked_out = click_first_matching(
-            page,
-            checkout_selectors,
-            timeout_sec=8,
-        )
-        if not checked_out:
-            if back_to_store.count() > 0 and back_to_store.first.is_visible():
-                raise RuntimeError("장바구니에 담긴 수령 가능 상품이 없습니다(Back to store 상태).")
-            raise RuntimeError("장바구니 확인/결제 버튼을 찾지 못했습니다.")
-
-        time.sleep(2)
-        return claimed
-
-    except Exception as e:
-        short_msg = str(e).splitlines()[0] if str(e) else "알 수 없는 오류"
-        raise RuntimeError(f"[{step}] {short_msg}") from e
+  return claimed
 
 
 def main():
-    total = len(ACCOUNTS)
-    success = 0
-    fail = 0
-    total_items = 0
+  accounts = get_accounts()
+  total = len(accounts)
+  success = 0
+  fail = 0
+  total_items = 0
 
-    if total == 0:
-        print("ACCOUNTS 목록이 비어 있습니다.")
-        return
+  with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    for acc in accounts:
+      pid = (acc.get("player_id") or acc.get("id") or "").strip()
+      if not pid:
+        continue
+      context = browser.new_context()
+      page = context.new_page()
+      try:
+        items = run_one_account(page, pid)
+        success += 1
+        total_items += items
+        print(f"{pid} 성공 ({items}개)")
+      except Exception as e:
+        fail += 1
+        print(f"{pid} 실패: {e}")
+      finally:
+        context.close()
+    browser.close()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-
-        for idx, acc in enumerate(ACCOUNTS, start=1):
-            pid = (acc.get("player_id") or acc.get("id") or "").strip()
-            if not pid:
-                fail += 1
-                print(f"[{idx}/{total}] 빈 Player ID 건너뜀")
-                continue
-
-            context = browser.new_context(viewport={"width": 1440, "height": 900})
-            page = context.new_page()
-            try:
-                items = run_one_account(page, pid)
-                success += 1
-                total_items += items
-                print(f"[{idx}/{total}] [{pid}] 성공 ({items}개)")
-            except Exception as e:
-                fail += 1
-                print(f"[{idx}/{total}] [{pid}] 실패: {e}")
-            finally:
-                context.close()
-
-        browser.close()
-
-    send_discord(total, success, fail, total_items)
+  send_discord(total, success, fail, total_items)
 
 
 if __name__ == "__main__":
-    main()
+  main()
