@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 import requests
 
 # =====================================================================
-# [상단 고정 영역 1] 유저 목록 (새 유저가 생기면 여기에 한 줄씩 추가)
+# [상단 고정 영역 1] 유저 목록 (총 18명 / 새 유저가 생기면 여기에 한 줄씩 추가)
 # =====================================================================
 FIXED_ACCOUNTS = [
     {"player_id": "PusOwtcLJcV03wn8RjtoECrhB1CA"},
@@ -25,6 +25,7 @@ FIXED_ACCOUNTS = [
     {"player_id": "YAfE5fsF4tEeTxiqD7syZxIv3G2x"},
     {"player_id": "BJw4fxytlnQTCxquBX5psPIfMt3K"},
     {"player_id": "IcYEucZP6I5xDDD7Jffp0QrWtIaO"},
+    {"player_id": "Q6Sm1JxFUvTBse6EAsJr9wvdYeE2"},
 ]
 
 # =====================================================================
@@ -36,7 +37,7 @@ MAX_CLAIMS_PER_ACCOUNT = 10
 
 SELECTORS = {
     "player_id_input": (
-        'input[name*="player" i], input[placeholder*="ID" i], input[placeholder*="id" i], input[type="text"]'
+        'input[name*="player" i], input[placeholder*="player" i], input[placeholder*="id" i], input[type="text"]'
     ),
     "login_submit": (
         'button:has-text("Log in"):visible, button:has-text("Login"):visible, '
@@ -44,24 +45,20 @@ SELECTORS = {
         'button:has-text("로그인"):visible, button:has-text("확인"):visible, button[type="submit"]:visible'
     ),
     "free_button": (
-        'button:has-text("Get free"):visible, button:has-text("무료로 받으세요"):visible, '
-        'button:has-text("무료"):visible, [data-testid*="free" i] button:visible'
+        '[data-testid="free-button"]:visible, '
+        'button:has-text("Get free"):visible, button:has-text("무료로 받으세요"):visible, button:has-text("무료"):visible'
     ),
     "cart_button": (
-        '[data-testid="header-cart-button"], [aria-label*="Cart" i], [aria-label*="cart" i], '
-        'button[class*="cart" i], a[class*="cart" i], .cart-button'
+        '[data-testid="header-cart-button"]:visible, [aria-label*="cart" i]:visible, .cart-button:visible'
     ),
     "checkout_button": (
-        '[data-testid="cart-checkout-button"], .cart__checkout-button, '
+        '[data-testid="cart-checkout-button"]:visible, .cart__checkout-button:visible, '
         'button:has-text("Checkout"):visible, button:has-text("Confirm"):visible, '
-        'button:has-text("Claim"):visible, button:has-text("확인"):visible, button:has-text("결제"):visible'
+        'button:has-text("확인"):visible, button:has-text("결제"):visible'
     ),
 }
 
 
-# =====================================================================
-# [하단 실행 영역] 수령 로직
-# =====================================================================
 def get_accounts():
   if FIXED_ACCOUNTS:
     return FIXED_ACCOUNTS
@@ -70,9 +67,7 @@ def get_accounts():
 
 def send_discord(total, success, fail, items):
   if not DISCORD_WEBHOOK:
-    print("디스코드 웹훅 URL이 설정되지 않았습니다.")
     return
-
   message = (
       f"**[Eternal Hero 보상 수령 보고]**\n"
       f"• 현황: 등록 인원 {total}명 / 완료 {success}명 (실패 {fail}명)\n"
@@ -82,34 +77,29 @@ def send_discord(total, success, fail, items):
 
 
 def apply_player_id(page, player_id):
-  """페이지 내 Player ID 입력칸이 있으면 계정별로 입력 후 제출 버튼까지 시도"""
   inputs = page.locator(SELECTORS["player_id_input"])
-  filled = False
   for i in range(inputs.count()):
     inp = inputs.nth(i)
     if inp.is_visible() and inp.is_editable():
       inp.click()
       inp.fill(player_id)
       inp.press("Enter")
-      filled = True
-      time.sleep(1.0)
+      time.sleep(1.2)
       break
 
-  if filled:
-    submit_btns = page.locator(SELECTORS["login_submit"])
-    for j in range(submit_btns.count()):
-      btn = submit_btns.nth(j)
-      if btn.is_visible() and btn.is_enabled():
-        try:
-          btn.click(timeout=2000)
-          time.sleep(1.5)
-          break
-        except Exception:
-          continue
+  submit_btns = page.locator(SELECTORS["login_submit"])
+  for j in range(submit_btns.count()):
+    btn = submit_btns.nth(j)
+    if btn.is_visible() and btn.is_enabled():
+      try:
+        btn.click(timeout=2500)
+        time.sleep(1.5)
+        break
+      except Exception:
+        continue
 
 
 def collect_free_items(page):
-  """화면 하단까지 내리며 보이는 무료 아이템을 가능한 만큼 장바구니에 담기"""
   claimed = 0
   seen_clicks = 0
 
@@ -128,7 +118,7 @@ def collect_free_items(page):
       if not btn.is_visible() or not btn.is_enabled():
         continue
       txt = (btn.inner_text() or "").strip().lower()
-      if "owned" in txt or "claimed" in txt or "수령 완료" in txt:
+      if any(k in txt for k in ("owned", "claimed", "수령 완료", "완료")):
         continue
 
       seen_clicks += 1
@@ -149,30 +139,17 @@ def collect_free_items(page):
 
 
 def checkout_if_not_empty(page, claimed_count):
-  """장바구니에 담긴 항목이 있거나 장바구니 버튼이 있으면 열어서 결제/확인 진행"""
   cart_btns = page.locator(SELECTORS["cart_button"])
-  cart_clicked = False
-  for i in range(cart_btns.count()):
-    cbtn = cart_btns.nth(i)
-    if cbtn.is_visible():
-      try:
-        cbtn.scroll_into_view_if_needed(timeout=3000)
-        cbtn.click(timeout=3000)
-        cart_clicked = True
-        time.sleep(1.5)
-        break
-      except Exception:
-        continue
+  if cart_btns.count() == 0:
+    return 0, "장바구니버튼없음"
 
-  if not cart_clicked:
-    return 0
-
-  # 장바구니가 비어 있음을 나타내는 문구가 보이면 결제 없이 종료
-  empty_signals = page.locator(
-      ':text("empty"):visible, :text("Empty"):visible, :text("비어"):visible, :text("0 items"):visible, :text("0개"):visible'
-  )
-  if claimed_count == 0 and empty_signals.count() > 0:
-    return 0
+  try:
+    cbtn = cart_btns.first
+    cbtn.scroll_into_view_if_needed(timeout=3000)
+    cbtn.click(timeout=3000)
+    time.sleep(1.5)
+  except Exception:
+    return 0, "장바구니클릭실패"
 
   checkout_btns = page.locator(SELECTORS["checkout_button"])
   for j in range(checkout_btns.count()):
@@ -181,11 +158,11 @@ def checkout_if_not_empty(page, claimed_count):
       try:
         kbtn.click(timeout=3000)
         time.sleep(2.0)
-        return max(claimed_count, 1)
+        return max(claimed_count, 1), "결제완료"
       except Exception:
         continue
 
-  return 0
+  return 0, "결제버튼없음"
 
 
 def run_one_account(page, player_id):
@@ -195,8 +172,8 @@ def run_one_account(page, player_id):
 
   apply_player_id(page, player_id)
   claimed = collect_free_items(page)
-  final_claimed = checkout_if_not_empty(page, claimed)
-  return final_claimed
+  final_claimed, status_note = checkout_if_not_empty(page, claimed)
+  return final_claimed, f"담기:{claimed}, {status_note}"
 
 
 def main():
@@ -215,10 +192,10 @@ def main():
       context = browser.new_context(viewport={"width": 1440, "height": 900})
       page = context.new_page()
       try:
-        items = run_one_account(page, pid)
+        items, detail = run_one_account(page, pid)
         success += 1
         total_items += items
-        print(f"{pid} 성공 ({items}개)")
+        print(f"{pid} 성공 ({items}개) [{detail}]")
       except Exception as e:
         fail += 1
         print(f"{pid} 실패: {e}")
