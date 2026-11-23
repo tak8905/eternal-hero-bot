@@ -1,12 +1,10 @@
+Python
 import json
 import os
 import time
 from playwright.sync_api import sync_playwright
 import requests
 
-# =====================================================================
-# [상단 고정 영역 1] 유저 목록 (총 18명 / 새 유저가 생기면 여기에 한 줄씩 추가)
-# =====================================================================
 FIXED_ACCOUNTS = [
     {"player_id": "PusOwtcLJcV03wn8RjtoECrhB1CA"},
     {"player_id": "Ehqg9VFIColuEZ0YriFCndrkjqxC"},
@@ -28,16 +26,21 @@ FIXED_ACCOUNTS = [
     {"player_id": "Q6Sm1JxFUvTBse6EAsJr9wvdYeE2"},
 ]
 
-# =====================================================================
-# [상단 고정 영역 2] 기본 URL, 웹훅 및 웹샵 버튼 선택자
-# =====================================================================
 URL = "https://store.eternalhero.rivvy.games/"
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "")
 MAX_CLAIMS_PER_ACCOUNT = 10
 
 SELECTORS = {
+    "logged_in_badge": (
+        '[data-testid="user-account"]:visible, [data-testid="header-logout-button"]:visible'
+    ),
+    "open_login_trigger": (
+        'button:has-text("Log in"):visible, button:has-text("Login"):visible, '
+        'button:has-text("로그인"):visible, [data-testid*="login" i]:visible'
+    ),
     "player_id_input": (
-        'input[name*="player" i], input[placeholder*="player" i], input[placeholder*="id" i], input[type="text"]'
+        'input[name*="player" i], input[placeholder*="player" i], '
+        'input[placeholder*="id" i], input[type="text"]'
     ),
     "login_submit": (
         'button:has-text("Log in"):visible, button:has-text("Login"):visible, '
@@ -46,7 +49,9 @@ SELECTORS = {
     ),
     "free_button": (
         '[data-testid="free-button"]:visible, '
-        'button:has-text("Get free"):visible, button:has-text("무료로 받으세요"):visible, button:has-text("무료"):visible'
+        ':is(button, a, div[role="button"]):has-text("Get free"):visible, '
+        ':is(button, a, div[role="button"]):has-text("무료로 받으세요"):visible, '
+        ':is(button, a, div[role="button"]):has-text("무료"):visible'
     ),
     "cart_button": (
         '[data-testid="header-cart-button"]:visible, [aria-label*="cart" i]:visible, .cart-button:visible'
@@ -76,7 +81,32 @@ def send_discord(total, success, fail, items):
   requests.post(DISCORD_WEBHOOK, json={"content": message})
 
 
+def is_logged_in(page):
+  return page.locator(SELECTORS["logged_in_badge"]).count() > 0
+
+
 def apply_player_id(page, player_id):
+  if is_logged_in(page):
+    return "이미로그인"
+
+  # 로그인 창/모달을 여는 버튼이 먼저 필요한 경우 시도
+  inputs = page.locator(SELECTORS["player_id_input"])
+  has_visible_input = any(
+      inputs.nth(i).is_visible() and inputs.nth(i).is_editable()
+      for i in range(inputs.count())
+  )
+  if not has_visible_input:
+    triggers = page.locator(SELECTORS["open_login_trigger"])
+    for t in range(triggers.count()):
+      tbtn = triggers.nth(t)
+      if tbtn.is_visible() and tbtn.is_enabled():
+        try:
+          tbtn.click(timeout=2500)
+          time.sleep(1.0)
+          break
+        except Exception:
+          continue
+
   inputs = page.locator(SELECTORS["player_id_input"])
   for i in range(inputs.count()):
     inp = inputs.nth(i)
@@ -97,6 +127,20 @@ def apply_player_id(page, player_id):
         break
       except Exception:
         continue
+
+  return "로그인확인" if is_logged_in(page) else "미로그인상태"
+
+
+def debug_page_hints(page):
+  """담기:0일 때 화면에 어떤 버튼/테스트ID가 있는지 짧게 출력"""
+  info = page.evaluate("""() => {
+        const btns = Array.from(document.querySelectorAll('button, [role="button"], a')).slice(0, 12);
+        return btns.map(el => ({
+            text: (el.innerText || '').trim().slice(0, 20),
+            testid: el.getAttribute('data-testid') || ''
+        }));
+    }""")
+  return str(info)
 
 
 def collect_free_items(page):
@@ -139,6 +183,9 @@ def collect_free_items(page):
 
 
 def checkout_if_not_empty(page, claimed_count):
+  if claimed_count == 0:
+    return 0, "결제버튼없음"
+
   cart_btns = page.locator(SELECTORS["cart_button"])
   if cart_btns.count() == 0:
     return 0, "장바구니버튼없음"
@@ -158,7 +205,7 @@ def checkout_if_not_empty(page, claimed_count):
       try:
         kbtn.click(timeout=3000)
         time.sleep(2.0)
-        return max(claimed_count, 1), "결제완료"
+        return claimed_count, "결제완료"
       except Exception:
         continue
 
@@ -170,10 +217,13 @@ def run_one_account(page, player_id):
   page.wait_for_load_state("networkidle", timeout=15000)
   time.sleep(2)
 
-  apply_player_id(page, player_id)
+  login_state = apply_player_id(page, player_id)
   claimed = collect_free_items(page)
   final_claimed, status_note = checkout_if_not_empty(page, claimed)
-  return final_claimed, f"담기:{claimed}, {status_note}"
+  extra = ""
+  if claimed == 0:
+    extra = f" | {login_state} | 힌트: {debug_page_hints(page)}"
+  return final_claimed, f"담기:{claimed}, {status_note}{extra}"
 
 
 def main():
