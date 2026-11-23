@@ -54,8 +54,9 @@ SELECTORS = {
     ),
     "free_button": (
         '[data-testid="free-button"], '
-        'button:has-text("Get free"), button:has-text("무료로 받으세요"), '
-        '[role="button"]:has-text("Get free"), [role="button"]:has-text("무료로 받으세요")'
+        ':is(button, a, [role="button"]):has-text("Get free"), '
+        ':is(button, a, [role="button"]):has-text("무료로 받으세요"), '
+        '[data-testid*="free" i]'
     ),
     "cart_button": (
         '[data-testid="header-cart-button"], [aria-label*="cart" i], .cart-button'
@@ -152,19 +153,31 @@ def apply_player_id(page, player_id):
 
 
 def scroll_to_bottom_gradually(page):
-  """페이지 높이를 따라 단계적으로 스크롤해 하단 무료 보상 영역 렌더링"""
   total_height = page.evaluate("document.body.scrollHeight")
   steps = 6
   for step in range(1, steps + 1):
     y = int(total_height * step / steps)
     page.evaluate(f"window.scrollTo(0, {y})")
-    time.sleep(0.35)
+    time.sleep(0.4)
   page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-  time.sleep(0.7)
+  time.sleep(0.9)
+
+
+def free_buttons_summary(page):
+  """담기:0일 때 free_button 요소들의 텍스트/상태 요약"""
+  loc = page.locator(SELECTORS["free_button"])
+  items = []
+  for i in range(min(loc.count(), 8)):
+    el = loc.nth(i)
+    items.append({
+        "text": (el.inner_text() or "").strip().replace("\n", " ")[:20],
+        "vis": el.is_visible(),
+        "en": el.is_enabled(),
+    })
+  return str(items)
 
 
 def collect_free_items(page):
-  """수령 가능한 무료 버튼을 찾아 장바구니에 담기"""
   claimed = 0
   seen_clicks = 0
 
@@ -202,7 +215,6 @@ def collect_free_items(page):
 
 
 def checkout_if_not_empty(page, claimed_count):
-  """장바구니에 담긴 항목이 있을 때만 장바구니를 열고 결제/확인 진행"""
   if claimed_count == 0:
     return 0, "장바구니비어스킵"
 
@@ -244,13 +256,19 @@ def checkout_if_not_empty(page, claimed_count):
 
 def run_one_account(page, player_id):
   page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-  page.wait_for_load_state("networkidle", timeout=15000)
+  try:
+    page.wait_for_load_state("networkidle", timeout=15000)
+  except Exception:
+    pass
   time.sleep(2)
 
   login_state = apply_player_id(page, player_id)
   claimed = collect_free_items(page)
   final_claimed, status_note = checkout_if_not_empty(page, claimed)
-  return final_claimed, f"담기:{claimed}, {status_note} | {login_state}"
+  extra = ""
+  if claimed == 0:
+    extra = f" | {login_state} | 무료버튼목록: {free_buttons_summary(page)}"
+  return final_claimed, f"담기:{claimed}, {status_note}{extra}"
 
 
 def main():
