@@ -26,6 +26,7 @@ FIXED_ACCOUNTS = [
     {"player_id": "BJw4fxytlnQTCxquBX5psPIfMt3K"},
     {"player_id": "IcYEucZP6I5xDDD7Jffp0QrWtIaO"},
     {"player_id": "Q6Sm1JxFUvTBse6EAsJr9wvdYeE2"},
+    {"player_id": "8NxmY2BVpxKeIX171RF4hc4fNpu7"},
 ]
 
 # =====================================================================
